@@ -32,6 +32,7 @@ import org.apache.maven.model.Plugin;
 import org.apache.maven.project.DefaultProjectBuildingRequest;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuilder;
+import org.apache.maven.project.ProjectBuildingException;
 import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.project.ProjectBuildingResult;
 import org.apache.maven.shared.dependency.graph.DependencyCollectorBuilder;
@@ -39,6 +40,7 @@ import org.apache.maven.shared.dependency.graph.DependencyNode;
 import org.apache.maven.shared.dependency.graph.traversal.DependencyNodeVisitor;
 import org.apache.maven.shared.transfer.artifact.resolve.ArtifactResolver;
 import org.apache.maven.shared.transfer.artifact.resolve.ArtifactResult;
+import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
 
 /**
  * Entry point for the lock file generation. This class is responsible for generating the lock file for a project.
@@ -116,6 +118,7 @@ public class LockFileFacade {
                 .collect(Collectors.toCollection(() -> new TreeSet<>(Comparator.comparing(
                         io.github.chains_project.maven_lockfile.graph.DependencyNode::getComparatorString))));
         var pom = constructRecursivePom(project, checksumCalculator);
+
         return new LockFile(
                 GroupId.of(project.getGroupId()),
                 ArtifactId.of(project.getArtifactId()),
@@ -170,6 +173,65 @@ public class LockFileFacade {
                     pluginDependencies));
         }
         return plugins;
+    }
+
+    private static Optional<ArtifactResult> resolvePomArtifact(
+            Artifact pluginArtifact, MavenSession session, MavenProject project) {
+        try {
+            ArtifactFactory artifactFactory = session.getContainer().lookup(ArtifactFactory.class);
+            Artifact pomArtifact = artifactFactory.createArtifact(
+                    pluginArtifact.getGroupId(),
+                    pluginArtifact.getArtifactId(),
+                    pluginArtifact.getVersion(),
+                    null,
+                    "pom");
+
+            ProjectBuildingRequest pomBuildingRequest =
+                    new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
+            pomBuildingRequest.setRemoteRepositories(project.getPluginArtifactRepositories());
+
+            ArtifactResolver artifactResolver = session.getContainer().lookup(ArtifactResolver.class);
+            ArtifactResult result = artifactResolver.resolveArtifact(pomBuildingRequest, pomArtifact);
+
+            if (result.getArtifact() == null || result.getArtifact().getFile() == null) {
+                return Optional.empty();
+            }
+
+            return Optional.of(result);
+        } catch (Exception e) {
+            PluginLogManager.getLog()
+                    .debug(String.format(
+                            "Could not resolve POM artifact for plugin %s: %s", pluginArtifact, e.getMessage()));
+        }
+
+        return Optional.empty();
+    }
+
+    private static Optional<MavenProject> buildProjectFromPom(
+            File pomFile, MavenSession session, MavenProject project) {
+        ProjectBuildingRequest buildingRequest = new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
+        buildingRequest.setRemoteRepositories(project.getPluginArtifactRepositories());
+        buildingRequest.setProcessPlugins(false);
+        buildingRequest.setResolveDependencies(true);
+
+        ProjectBuilder projectBuilder = null;
+        try {
+            projectBuilder = session.getContainer().lookup(ProjectBuilder.class);
+            ProjectBuildingResult result = projectBuilder.build(pomFile, buildingRequest);
+
+            if (result.getProblems() != null && !result.getProblems().isEmpty()) {
+                PluginLogManager.getLog()
+                        .warn(String.format(
+                                "Problems building plugin project for %s: %s", pomFile, result.getProblems()));
+            }
+
+            return Optional.of(result.getProject());
+        } catch (ComponentLookupException | ProjectBuildingException e) {
+            PluginLogManager.getLog()
+                    .warn(String.format("Problems building plugin project for %s: %s", pomFile, e.getMessage()));
+        }
+
+        return Optional.empty();
     }
 
     /**
@@ -229,28 +291,9 @@ public class LockFileFacade {
                     if (Files.exists(localPomPath)) {
                         pluginPomFile = localPomPath.toFile();
                     } else {
-                        // If not in local repo, try to resolve it using artifact resolver
-                        @SuppressWarnings("deprecation")
-                        ArtifactFactory artifactFactory = session.getContainer().lookup(ArtifactFactory.class);
-                        Artifact pomArtifact = artifactFactory.createArtifact(
-                                pluginArtifact.getGroupId(),
-                                pluginArtifact.getArtifactId(),
-                                pluginArtifact.getVersion(),
-                                null,
-                                "pom");
-
-                        ProjectBuildingRequest pomBuildingRequest =
-                                new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
-                        pomBuildingRequest.setRemoteRepositories(project.getPluginArtifactRepositories());
-
-                        @SuppressWarnings("deprecation")
-                        ArtifactResolver artifactResolver =
-                                session.getContainer().lookup(ArtifactResolver.class);
-                        ArtifactResult result = artifactResolver.resolveArtifact(pomBuildingRequest, pomArtifact);
-                        if (result != null
-                                && result.getArtifact() != null
-                                && result.getArtifact().getFile() != null) {
-                            pluginPomFile = result.getArtifact().getFile();
+                        Optional<ArtifactResult> resultOptional = resolvePomArtifact(pluginArtifact, session, project);
+                        if (resultOptional.isPresent()) {
+                            pluginPomFile = resultOptional.get().getArtifact().getFile();
                         }
                     }
                 } catch (Exception e) {
@@ -274,29 +317,12 @@ public class LockFileFacade {
                             "Resolving dependencies for plugin %s using POM: %s",
                             pluginArtifact, pluginPomFile.getAbsolutePath()));
 
-            // Build MavenProject from plugin POM
-            ProjectBuildingRequest buildingRequest =
-                    new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
-            buildingRequest.setRemoteRepositories(project.getPluginArtifactRepositories());
-            buildingRequest.setProcessPlugins(false);
-            buildingRequest.setResolveDependencies(true);
-
-            // Note: getContainer() is deprecated but there's no clear replacement in the current Maven API
-            @SuppressWarnings("deprecation")
-            ProjectBuilder projectBuilder = session.getContainer().lookup(ProjectBuilder.class);
-            ProjectBuildingResult result = projectBuilder.build(pluginPomFile, buildingRequest);
-
-            if (result.getProblems() != null && !result.getProblems().isEmpty()) {
-                PluginLogManager.getLog()
-                        .warn(String.format(
-                                "Problems building plugin project for %s: %s", pluginArtifact, result.getProblems()));
-            }
-
-            MavenProject pluginProject = result.getProject();
-            if (pluginProject == null) {
+            Optional<MavenProject> pluginProjectOptional = buildProjectFromPom(pluginPomFile, session, project);
+            if (pluginProjectOptional.isEmpty()) {
                 PluginLogManager.getLog().warn(String.format("Could not build project for plugin %s", pluginArtifact));
                 return Collections.emptySet();
             }
+            MavenProject pluginProject = pluginProjectOptional.get();
 
             int declaredDeps = pluginProject.getDependencies() != null
                     ? pluginProject.getDependencies().size()
