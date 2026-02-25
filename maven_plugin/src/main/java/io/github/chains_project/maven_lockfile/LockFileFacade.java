@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
 import org.apache.maven.artifact.factory.ArtifactFactory;
+import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
 import org.apache.maven.artifact.resolver.filter.ScopeArtifactFilter;
 import org.apache.maven.execution.MavenSession;
@@ -176,7 +177,7 @@ public class LockFileFacade {
     }
 
     private static Optional<ArtifactResult> resolvePomArtifact(
-            Artifact pluginArtifact, MavenSession session, MavenProject project) {
+            Artifact pluginArtifact, MavenSession session, MavenProject project, boolean usePluginRepositories) {
         try {
             ArtifactFactory artifactFactory = session.getContainer().lookup(ArtifactFactory.class);
             Artifact pomArtifact = artifactFactory.createArtifact(
@@ -186,9 +187,13 @@ public class LockFileFacade {
                     null,
                     "pom");
 
+            List<ArtifactRepository> artifactRepositories = usePluginRepositories
+                    ? project.getPluginArtifactRepositories()
+                    : project.getRemoteArtifactRepositories();
+
             ProjectBuildingRequest pomBuildingRequest =
                     new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
-            pomBuildingRequest.setRemoteRepositories(project.getPluginArtifactRepositories());
+            pomBuildingRequest.setRemoteRepositories(artifactRepositories);
 
             ArtifactResolver artifactResolver = session.getContainer().lookup(ArtifactResolver.class);
             ArtifactResult result = artifactResolver.resolveArtifact(pomBuildingRequest, pomArtifact);
@@ -208,9 +213,13 @@ public class LockFileFacade {
     }
 
     private static Optional<MavenProject> buildProjectFromPom(
-            File pomFile, MavenSession session, MavenProject project) {
+            File pomFile, MavenSession session, MavenProject project, boolean usePluginRepositories) {
+        List<ArtifactRepository> artifactRepositories = usePluginRepositories
+                ? project.getPluginArtifactRepositories()
+                : project.getRemoteArtifactRepositories();
+
         ProjectBuildingRequest buildingRequest = new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
-        buildingRequest.setRemoteRepositories(project.getPluginArtifactRepositories());
+        buildingRequest.setRemoteRepositories(artifactRepositories);
         buildingRequest.setProcessPlugins(false);
         buildingRequest.setResolveDependencies(true);
 
@@ -291,7 +300,8 @@ public class LockFileFacade {
                     if (Files.exists(localPomPath)) {
                         pluginPomFile = localPomPath.toFile();
                     } else {
-                        Optional<ArtifactResult> resultOptional = resolvePomArtifact(pluginArtifact, session, project);
+                        Optional<ArtifactResult> resultOptional =
+                                resolvePomArtifact(pluginArtifact, session, project, true);
                         if (resultOptional.isPresent()) {
                             pluginPomFile = resultOptional.get().getArtifact().getFile();
                         }
@@ -317,7 +327,7 @@ public class LockFileFacade {
                             "Resolving dependencies for plugin %s using POM: %s",
                             pluginArtifact, pluginPomFile.getAbsolutePath()));
 
-            Optional<MavenProject> pluginProjectOptional = buildProjectFromPom(pluginPomFile, session, project);
+            Optional<MavenProject> pluginProjectOptional = buildProjectFromPom(pluginPomFile, session, project, true);
             if (pluginProjectOptional.isEmpty()) {
                 PluginLogManager.getLog().warn(String.format("Could not build project for plugin %s", pluginArtifact));
                 return Collections.emptySet();
