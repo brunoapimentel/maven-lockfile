@@ -15,6 +15,7 @@ import io.github.chains_project.maven_lockfile.data.ResolvedUrl;
 import io.github.chains_project.maven_lockfile.data.VersionNumber;
 import io.github.chains_project.maven_lockfile.graph.DependencyGraph;
 import io.github.chains_project.maven_lockfile.reporting.PluginLogManager;
+import io.github.chains_project.maven_lockfile.resolvers.BomResolver;
 import io.github.chains_project.maven_lockfile.resolvers.ProjectBuilder;
 import java.nio.file.Path;
 import java.util.*;
@@ -109,6 +110,7 @@ public class LockFileFacade {
                 .collect(Collectors.toCollection(() -> new TreeSet<>(Comparator.comparing(
                         io.github.chains_project.maven_lockfile.graph.DependencyNode::getComparatorString))));
         var pom = constructRecursivePom(project, checksumCalculator);
+        resolveBomsForDependencies(graph, session, project, checksumCalculator);
         return new LockFile(
                 GroupId.of(project.getGroupId()),
                 ArtifactId.of(project.getArtifactId()),
@@ -368,5 +370,42 @@ public class LockFileFacade {
         }
 
         return lastPom;
+    }
+
+    /**
+     * Resolve the BOM POMs for the current project's dependencies.
+     *
+     * @param graph The dependency graph for the project
+     * @param session The Maven session
+     * @param rootProject The current Maven project (for repository configuration)
+     * @param checksumCalculator The checksum calculator
+     * @return A set of BOM POMs
+     */
+    private static void resolveBomsForDependencies(
+            DependencyGraph graph,
+            MavenSession session,
+            MavenProject rootProject,
+            AbstractChecksumCalculator checksumCalculator) {
+        ProjectBuilder projectBuilder = new ProjectBuilder(session, rootProject.getRemoteArtifactRepositories());
+        BomResolver bomResolver =
+                new BomResolver(session, rootProject.getRemoteArtifactRepositories(), checksumCalculator);
+
+        graph.getGraph().forEach(node -> {
+            var projectOptional = projectBuilder.buildFromGav(
+                    node.getGroupId().getValue(),
+                    node.getArtifactId().getValue(),
+                    node.getVersion().getValue());
+
+            if (projectOptional.isEmpty()) {
+                PluginLogManager.getLog().warn(String.format("Skipping BOM resolution for %s", node));
+                return;
+            }
+
+            Set<Pom> boms = bomResolver.resolveForProject(projectOptional.get());
+
+            if (!boms.isEmpty()) {
+                node.setBoms(boms);
+            }
+        });
     }
 }
