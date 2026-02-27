@@ -10,6 +10,8 @@ import io.github.chains_project.maven_lockfile.data.RepositoryId;
 import io.github.chains_project.maven_lockfile.data.ResolvedUrl;
 import io.github.chains_project.maven_lockfile.data.VersionNumber;
 import java.util.*;
+import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.DefaultArtifact;
 
 /**
  * This class represents a node in the dependency graph. It contains the artifactId, groupId and version  of the dependency.

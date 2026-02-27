@@ -10,6 +10,10 @@ import java.util.Collections;
 import java.util.Objects;
 import java.util.Set;
 
+import org.apache.maven.artifact.Artifact;
+import org.apache.maven.artifact.DefaultArtifact;
+import org.apache.maven.model.Dependency;
+
 /**
  * A lock file contains a list of dependencies, and the version of the lock file format.
  * It also contains the name and version of the project that the lock file belongs to.
@@ -43,6 +47,8 @@ public class LockFile {
 
     private final MetaData metaData;
 
+    private final Set<Bom> boms;
+
     public LockFile(
             GroupId groupId,
             ArtifactId name,
@@ -50,7 +56,8 @@ public class LockFile {
             Pom pom,
             Set<DependencyNode> dependencies,
             Set<MavenPlugin> mavenPlugins,
-            MetaData metaData) {
+            MetaData metaData,
+            Set<Bom> boms) {
         this.groupId = groupId;
         this.name = name;
         this.version = versionNumber;
@@ -58,6 +65,7 @@ public class LockFile {
         this.dependencies = dependencies == null ? Collections.emptySet() : dependencies;
         this.mavenPlugins = mavenPlugins == null ? Collections.emptySet() : mavenPlugins;
         this.metaData = metaData;
+        this.boms = boms == null ? Collections.emptySet() : boms;
     }
     /**
      * Create a lock file object from a serialized JSON string.

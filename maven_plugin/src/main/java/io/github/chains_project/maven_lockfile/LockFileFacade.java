@@ -4,15 +4,7 @@ import com.google.common.graph.GraphBuilder;
 import com.google.common.graph.MutableGraph;
 import io.github.chains_project.maven_lockfile.checksum.AbstractChecksumCalculator;
 import io.github.chains_project.maven_lockfile.checksum.RepositoryInformation;
-import io.github.chains_project.maven_lockfile.data.ArtifactId;
-import io.github.chains_project.maven_lockfile.data.GroupId;
-import io.github.chains_project.maven_lockfile.data.LockFile;
-import io.github.chains_project.maven_lockfile.data.MavenPlugin;
-import io.github.chains_project.maven_lockfile.data.MetaData;
-import io.github.chains_project.maven_lockfile.data.Pom;
-import io.github.chains_project.maven_lockfile.data.RepositoryId;
-import io.github.chains_project.maven_lockfile.data.ResolvedUrl;
-import io.github.chains_project.maven_lockfile.data.VersionNumber;
+import io.github.chains_project.maven_lockfile.data.*;
 import io.github.chains_project.maven_lockfile.graph.DependencyGraph;
 import io.github.chains_project.maven_lockfile.reporting.PluginLogManager;
 import java.io.File;
@@ -119,6 +111,7 @@ public class LockFileFacade {
                 .collect(Collectors.toCollection(() -> new TreeSet<>(Comparator.comparing(
                         io.github.chains_project.maven_lockfile.graph.DependencyNode::getComparatorString))));
         var pom = constructRecursivePom(project, checksumCalculator);
+        var boms = resolveBomPoms(graph, session, project, checksumCalculator);
 
         return new LockFile(
                 GroupId.of(project.getGroupId()),
@@ -127,7 +120,127 @@ public class LockFileFacade {
                 pom,
                 roots,
                 plugins,
-                metadata);
+                metadata,
+                boms);
+    }
+
+    private static Set<Bom> resolveBomPoms(
+            DependencyGraph graph, MavenSession session, MavenProject mainProject, AbstractChecksumCalculator checksumCalculator) {
+        return graph.getGraph().stream()
+                .flatMap(dependencyNode -> {
+                    Optional<ArtifactResult> artifactOptional =
+                            resolvePomArtifact(dependencyNode, session, mainProject, false);
+                    Set<Bom> boms = new HashSet<>();
+
+                    if (artifactOptional.isEmpty()) {
+                        return boms.stream();
+                    }
+
+                    Optional<MavenProject> projectOptional = buildProjectFromPom(
+                            artifactOptional.get().getArtifact().getFile(), session, mainProject, false);
+
+                    if (projectOptional.isEmpty()) {
+                        return boms.stream();
+                    }
+
+                    var project = projectOptional.get();
+                    var model = project.getOriginalModel();
+                    var dependencyManagement = model.getDependencyManagement();
+
+                    if(dependencyManagement == null) {
+                        return boms.stream();
+                    }
+
+                    for (Dependency dependency : dependencyManagement.getDependencies()) {
+                        if ("pom".equals(dependency.getType()) && "import".equals(dependency.getScope())) {
+                            dependency.setVersion(resolveVersionFromPlaceholder(dependency.getVersion(), project));
+                            var pomOptional = resolvePomArtifact(dependency, session, project);
+
+                            if(pomOptional.isEmpty()){
+                                PluginLogManager.getLog().warn(
+                                        String.format("Could not resolve BOM for %s",
+                                                dependency));
+                                continue;
+                            }
+
+                            var newPom = pomOptional.get();
+                            var bomProjectOptional = buildProjectFromPom(newPom.getFile(), session, project, false);
+
+                            if(bomProjectOptional.isEmpty()) {
+                                PluginLogManager.getLog().warn(
+                                        String.format("Could not resolve BOM for %s",
+                                                dependency));
+                                continue;
+                            }
+
+                            boms.add(resolveBomParents(bomProjectOptional.get(), checksumCalculator));
+                        }
+                    }
+
+                    return boms.stream();
+                })
+                .collect(Collectors.toCollection(HashSet::new));
+    }
+
+    private static String resolveVersionFromPlaceholder(String version, MavenProject project) {
+        if (version != null && version.startsWith("${") && version.endsWith("}")) {
+            String propertyName = version.substring(2, version.length() - 1);
+
+            // Check project properties (interpolated model has all properties resolved)
+            var resolvedVersion = project.getModel().getProperties().getProperty(propertyName);
+
+            if(resolvedVersion != null) {
+                return resolvedVersion;
+            }
+        }
+
+        return version;
+    }
+
+    private static Bom resolveBomParents(MavenProject start, AbstractChecksumCalculator checksumCalculator) {
+        List<MavenProject> projects = new ArrayList<>();
+        Bom current = null;
+
+        if(! start.hasParent()) {
+            return mavenProjectToBom(start, checksumCalculator, null);
+        }
+
+        while(start.hasParent()) {
+            projects.add(start);
+            start = start.getParent();
+        }
+
+        projects.add(start);
+
+        for(MavenProject project : projects.reversed()) {
+            if(current == null) {
+                current = mavenProjectToBom(project, checksumCalculator, null);
+            } else {
+                var bom = mavenProjectToBom(project, checksumCalculator, current);
+                current = bom;
+            }
+        }
+
+        return current;
+    }
+
+    private static Bom mavenProjectToBom(MavenProject project, AbstractChecksumCalculator checksumCalculator, Bom parent) {
+        var dependency = project.getModel();
+
+        var repoInfo = checksumCalculator.getArtifactResolvedField(project.getArtifact());
+        var checksum = checksumCalculator.calculateArtifactChecksum(project.getArtifact());
+        var checksumAlgorithm = checksumCalculator.getChecksumAlgorithm();
+
+        return new Bom(
+                dependency.getGroupId(),
+                dependency.getArtifactId(),
+                dependency.getVersion(),
+                repoInfo.getResolvedUrl().getValue(),
+                repoInfo.getRepositoryId().getValue(),
+                checksumAlgorithm,
+                checksum,
+                parent
+        );
     }
 
     private static Set<MavenPlugin> getAllPlugins(
@@ -174,6 +287,76 @@ public class LockFileFacade {
                     pluginDependencies));
         }
         return plugins;
+    }
+
+    private static Optional<Artifact> resolvePomArtifact(
+            Dependency node, MavenSession session, MavenProject project) {
+        try {
+            ArtifactFactory artifactFactory = session.getContainer().lookup(ArtifactFactory.class);
+            Artifact pomArtifact = artifactFactory.createArtifact(
+                    node.getGroupId(),
+                    node.getArtifactId(),
+                    node.getVersion(),
+                    null,
+                    "pom");
+
+            List<ArtifactRepository> artifactRepositories = project.getRemoteArtifactRepositories();
+
+            ProjectBuildingRequest pomBuildingRequest =
+                    new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
+            pomBuildingRequest.setRemoteRepositories(artifactRepositories);
+
+            ArtifactResolver artifactResolver = session.getContainer().lookup(ArtifactResolver.class);
+            ArtifactResult result = artifactResolver.resolveArtifact(pomBuildingRequest, pomArtifact);
+
+            if (result.getArtifact() == null || result.getArtifact().getFile() == null) {
+                return Optional.empty();
+            }
+
+            return Optional.of(result.getArtifact());
+        } catch (Exception e) {
+            PluginLogManager.getLog()
+                    .debug(String.format(
+                            "Could not resolve POM artifact for plugin %s: %s", node, e.getMessage()));
+        }
+
+        return Optional.empty();
+    }
+
+    private static Optional<ArtifactResult> resolvePomArtifact(
+            io.github.chains_project.maven_lockfile.graph.DependencyNode node, MavenSession session, MavenProject project, boolean usePluginRepositories) {
+        try {
+            ArtifactFactory artifactFactory = session.getContainer().lookup(ArtifactFactory.class);
+            Artifact pomArtifact = artifactFactory.createArtifact(
+                    node.getGroupId().getValue(),
+                    node.getArtifactId().getValue(),
+                    node.getVersion().getValue(),
+                    null,
+                    "pom");
+
+            List<ArtifactRepository> artifactRepositories = usePluginRepositories
+                    ? project.getPluginArtifactRepositories()
+                    : project.getRemoteArtifactRepositories();
+
+            ProjectBuildingRequest pomBuildingRequest =
+                    new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
+            pomBuildingRequest.setRemoteRepositories(artifactRepositories);
+
+            ArtifactResolver artifactResolver = session.getContainer().lookup(ArtifactResolver.class);
+            ArtifactResult result = artifactResolver.resolveArtifact(pomBuildingRequest, pomArtifact);
+
+            if (result.getArtifact() == null || result.getArtifact().getFile() == null) {
+                return Optional.empty();
+            }
+
+            return Optional.of(result);
+        } catch (Exception e) {
+            PluginLogManager.getLog()
+                    .debug(String.format(
+                            "Could not resolve POM artifact for plugin %s: %s", node, e.getMessage()));
+        }
+
+        return Optional.empty();
     }
 
     private static Optional<ArtifactResult> resolvePomArtifact(
