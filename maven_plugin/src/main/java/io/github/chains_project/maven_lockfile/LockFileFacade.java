@@ -110,7 +110,10 @@ public class LockFileFacade {
                 .collect(Collectors.toCollection(() -> new TreeSet<>(Comparator.comparing(
                         io.github.chains_project.maven_lockfile.graph.DependencyNode::getComparatorString))));
         var pom = constructRecursivePom(project, checksumCalculator);
+
         resolveBomsForDependencies(graph, session, project, checksumCalculator);
+        var boms = resolveBoms(session, project, checksumCalculator);
+
         return new LockFile(
                 GroupId.of(project.getGroupId()),
                 ArtifactId.of(project.getArtifactId()),
@@ -118,7 +121,8 @@ public class LockFileFacade {
                 pom,
                 roots,
                 plugins,
-                metadata);
+                metadata,
+                boms);
     }
 
     private static Set<MavenPlugin> getAllPlugins(
@@ -407,5 +411,20 @@ public class LockFileFacade {
                 node.setBoms(boms);
             }
         });
+    }
+
+    /**
+     * Resolve the BOM POMs for the current project.
+     *
+     * @param session The Maven session
+     * @param rootProject The current Maven project (for repository configuration)
+     * @param checksumCalculator The checksum calculator
+     * @return A set of BOM POMs
+     */
+    private static Set<Pom> resolveBoms(
+            MavenSession session, MavenProject rootProject, AbstractChecksumCalculator checksumCalculator) {
+        BomResolver bomResolver =
+                new BomResolver(session, rootProject.getRemoteArtifactRepositories(), checksumCalculator);
+        return bomResolver.resolveForProject(rootProject);
     }
 }
