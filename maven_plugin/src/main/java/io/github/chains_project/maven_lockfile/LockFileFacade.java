@@ -112,6 +112,7 @@ public class LockFileFacade {
                         io.github.chains_project.maven_lockfile.graph.DependencyNode::getComparatorString))));
         var pom = constructRecursivePom(project, checksumCalculator);
 
+        resolveParentPomsForDependencies(graph, session, project.getRemoteArtifactRepositories(), checksumCalculator);
         resolveBomsForDependencies(graph, session, project, checksumCalculator);
         var boms = resolveBoms(session, project, checksumCalculator);
 
@@ -124,6 +125,28 @@ public class LockFileFacade {
                 plugins,
                 metadata,
                 boms);
+    }
+
+    private static void resolveParentPomsForDependencies(DependencyGraph graph, MavenSession session, List<ArtifactRepository> repositories, AbstractChecksumCalculator checksumCalculator) {
+        ProjectBuilder builder = new ProjectBuilder(session, repositories);
+        graph.getFlatDependencySet().stream().forEach(node -> {
+            var projectOptional = builder.buildFromGav(
+                    node.getGroupId().getValue(),
+                    node.getArtifactId().getValue(),
+                    node.getVersion().getValue());
+
+            if(projectOptional.isPresent()) {
+                var project = projectOptional.get();
+
+                if(project.hasParent()) {
+                    PluginLogManager.getLog().info(String.format("WRITTING PARENT POM FOR %s", node));
+                    var pom = constructRecursivePom(project.getParent(), checksumCalculator);
+                    node.setParentPom(pom);
+                }
+            } else {
+                PluginLogManager.getLog().warn(String.format("Could not build project for dependency %s", node));
+            }
+        });
     }
 
     private static Set<MavenPlugin> getAllPlugins(

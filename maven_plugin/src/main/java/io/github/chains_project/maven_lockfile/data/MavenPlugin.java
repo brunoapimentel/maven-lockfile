@@ -19,6 +19,7 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
     private final ResolvedUrl resolved;
     private final RepositoryId repositoryId;
     private final Set<DependencyNode> dependencies;
+    private final Pom parent;
 
     public MavenPlugin(
             GroupId groupId,
@@ -28,7 +29,7 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
             RepositoryId repositoryId,
             String checksumAlgorithm,
             String checksum) {
-        this(groupId, artifactId, version, resolvedUrl, repositoryId, checksumAlgorithm, checksum, null);
+        this(groupId, artifactId, version, resolvedUrl, repositoryId, checksumAlgorithm, checksum, null, null);
     }
 
     public MavenPlugin(
@@ -39,7 +40,8 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
             RepositoryId repositoryId,
             String checksumAlgorithm,
             String checksum,
-            Set<DependencyNode> dependencies) {
+            Set<DependencyNode> dependencies,
+            Pom parent) {
         this.groupId = groupId;
         this.artifactId = artifactId;
         this.version = version;
@@ -48,6 +50,7 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
         this.checksumAlgorithm = checksumAlgorithm;
         this.checksum = checksum;
         this.dependencies = dependencies == null ? Collections.emptySet() : dependencies;
+        this.parent = parent;
     }
 
     public GroupId getGroupId() {
@@ -83,6 +86,10 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
      */
     public Set<DependencyNode> getDependencies() {
         return dependencies;
+    }
+
+    public Pom getParent() {
+        return parent;
     }
 
     @Override
