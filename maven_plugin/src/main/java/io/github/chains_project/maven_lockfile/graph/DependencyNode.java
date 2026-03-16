@@ -42,6 +42,8 @@ public class DependencyNode implements Comparable<DependencyNode> {
 
     private Set<Pom> boms;
 
+    private Pom parentPom;
+
     DependencyNode(
             ArtifactId artifactId,
             GroupId groupId,
@@ -189,6 +191,14 @@ public class DependencyNode implements Comparable<DependencyNode> {
         return included;
     }
 
+    public Pom getParentPom() {
+        return parentPom;
+    }
+
+    public void setParentPom(Pom parentPom) {
+        this.parentPom = parentPom;
+    }
+
     @Override
     public int hashCode() {
         return Objects.hash(
@@ -204,7 +214,8 @@ public class DependencyNode implements Comparable<DependencyNode> {
                 id,
                 parent,
                 children,
-                boms);
+                boms,
+                parentPom);
     }
 
     @Override
@@ -228,7 +239,8 @@ public class DependencyNode implements Comparable<DependencyNode> {
                 && Objects.equals(id, other.id)
                 && Objects.equals(parent, other.parent)
                 && Objects.equals(children, other.children)
-                && Objects.equals(boms, other.boms);
+                && Objects.equals(boms, other.boms)
+                && Objects.equals(parentPom, other.parentPom);
     }
 
     @Override
@@ -263,7 +275,7 @@ public class DependencyNode implements Comparable<DependencyNode> {
                 + ", classifier=" + classifier + ", type=" + type + ", checksumAlgorithm=" + checksumAlgorithm
                 + ", checksum=" + checksum + ", scope=" + scope + ", resolved=" + resolved + ", repositoryId="
                 + repositoryId + ", selectedVersion=" + selectedVersion + ", id=" + id + ", parent=" + parent
-                + ", children=" + children + ", boms=" + boms + "]";
+                + ", children=" + children + ", boms=" + boms + ", parentPom=" + parentPom +  "]";
     }
 
     public String getComparatorString() {

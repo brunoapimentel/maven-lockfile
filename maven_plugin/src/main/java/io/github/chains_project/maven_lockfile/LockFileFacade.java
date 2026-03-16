@@ -22,6 +22,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 import org.apache.maven.artifact.Artifact;
 import org.apache.maven.artifact.DefaultArtifact;
+import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
 import org.apache.maven.artifact.resolver.filter.ScopeArtifactFilter;
 import org.apache.maven.execution.MavenSession;
@@ -158,6 +159,9 @@ public class LockFileFacade {
                             dependencyCollectorBuilder,
                             checksumCalculator,
                             userDeclaredDeps);
+
+            Pom parent = resolvePluginParents(pluginArtifact, session, project.getPluginArtifactRepositories(), checksumCalculator);
+
             plugins.add(new MavenPlugin(
                     GroupId.of(pluginArtifact.getGroupId()),
                     ArtifactId.of(pluginArtifact.getArtifactId()),
@@ -166,9 +170,25 @@ public class LockFileFacade {
                     repositoryInformation.getRepositoryId(),
                     checksumCalculator.getChecksumAlgorithm(),
                     checksumCalculator.calculatePluginChecksum(pluginArtifact),
-                    pluginDependencies));
+                    pluginDependencies,
+                    parent));
         }
         return plugins;
+    }
+
+    private static Pom resolvePluginParents(Artifact pluginArtifact, MavenSession session, List<ArtifactRepository> repositories, AbstractChecksumCalculator checksumCalculator) {
+        ProjectBuilder projectBuilder = new ProjectBuilder(session, repositories);
+
+        // TODO: avoid building the plugin project twice (it is already being done to resolve dependencies)
+        Optional<MavenProject> pluginProjectOptional = projectBuilder.buildFromGav(
+                pluginArtifact.getGroupId(), pluginArtifact.getArtifactId(), pluginArtifact.getBaseVersion());
+
+        if (pluginProjectOptional.isEmpty()) {
+            PluginLogManager.getLog().warn(String.format("Could not build project for plugin %s", pluginArtifact));
+            return null;
+        }
+
+        return constructRecursivePom(pluginProjectOptional.get(), checksumCalculator);
     }
 
     /**
