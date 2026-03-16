@@ -38,6 +38,25 @@ public class DependencyGraph {
         return graph;
     }
 
+    public Set<DependencyNode> getFlatDependencySet() {
+        var dependencySet = new TreeSet<DependencyNode>();
+        var queue = new LinkedList<DependencyNode>();
+
+        // Start with all root nodes
+        queue.addAll(getRoots());
+
+        // Breadth-first traversal
+        while (!queue.isEmpty()) {
+            DependencyNode current = queue.poll();
+            if (dependencySet.add(current)) {
+                // Only add children if this node was newly added (avoid cycles)
+                queue.addAll(current.getChildren());
+            }
+        }
+
+        return dependencySet;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == this) return true;

@@ -394,7 +394,7 @@ public class LockFileFacade {
         BomResolver bomResolver =
                 new BomResolver(session, rootProject.getRemoteArtifactRepositories(), checksumCalculator);
 
-        graph.getGraph().forEach(node -> {
+        graph.getFlatDependencySet().forEach(node -> {
             var projectOptional = projectBuilder.buildFromGav(
                     node.getGroupId().getValue(),
                     node.getArtifactId().getValue(),
