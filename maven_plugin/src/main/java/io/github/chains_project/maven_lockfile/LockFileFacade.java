@@ -110,10 +110,11 @@ public class LockFileFacade {
                 .filter(v -> v.getParent() == null)
                 .collect(Collectors.toCollection(() -> new TreeSet<>(Comparator.comparing(
                         io.github.chains_project.maven_lockfile.graph.DependencyNode::getComparatorString))));
-        var pom = constructRecursivePom(project, checksumCalculator);
+        var pom = constructRecursivePom(project, session, checksumCalculator);
 
         resolveParentPomsForDependencies(graph, session, project.getRemoteArtifactRepositories(), checksumCalculator);
         resolveBomsForDependencies(graph, session, project, checksumCalculator);
+        resolveBomsForPlugins(plugins, session, project, checksumCalculator);
         var boms = resolveBoms(session, project, checksumCalculator);
 
         return new LockFile(
@@ -140,7 +141,7 @@ public class LockFileFacade {
 
                 if(project.hasParent()) {
                     PluginLogManager.getLog().info(String.format("WRITTING PARENT POM FOR %s", node));
-                    var pom = constructRecursivePom(project.getParent(), checksumCalculator);
+                    var pom = constructRecursivePom(project.getParent(), session, checksumCalculator);
                     node.setParentPom(pom);
                 }
             } else {
@@ -211,7 +212,7 @@ public class LockFileFacade {
             return null;
         }
 
-        return constructRecursivePom(pluginProjectOptional.get(), checksumCalculator);
+        return constructRecursivePom(pluginProjectOptional.get(), session, checksumCalculator);
     }
 
     /**
@@ -361,8 +362,9 @@ public class LockFileFacade {
      * POMs may be relative to the project being built, or are specified from an external POM.
      */
     private static Pom constructRecursivePom(
-            MavenProject initialProject, AbstractChecksumCalculator checksumCalculator) {
+            MavenProject initialProject, MavenSession session, AbstractChecksumCalculator checksumCalculator) {
         String checksumAlgorithm = checksumCalculator.getChecksumAlgorithm();
+        var bomResolver = new BomResolver(session, initialProject.getRemoteArtifactRepositories(), checksumCalculator);
 
         List<MavenProject> recursiveProjects = new ArrayList<>();
         MavenProject currentProject = initialProject;
@@ -404,6 +406,9 @@ public class LockFileFacade {
                 checksum = checksumCalculator.calculatePomChecksum(
                         project.getFile().toPath());
             }
+
+            var boms = bomResolver.resolveForProject(project);
+
             lastPom = new Pom(
                     GroupId.of(project.getGroupId()),
                     ArtifactId.of(project.getArtifactId()),
@@ -414,6 +419,10 @@ public class LockFileFacade {
                     checksumAlgorithm,
                     checksum,
                     lastPom);
+
+            if(boms.size() > 0) {
+                lastPom.setBoms(boms);
+            }
         }
 
         return lastPom;
@@ -454,6 +463,38 @@ public class LockFileFacade {
                 node.setBoms(boms);
             }
         });
+    }
+
+    private static void resolveBomsForPlugins(
+            Set<MavenPlugin> plugins,
+            MavenSession session,
+            MavenProject rootProject,
+            AbstractChecksumCalculator checksumCalculator) {
+        ProjectBuilder projectBuilder = new ProjectBuilder(session, rootProject.getRemoteArtifactRepositories());
+        BomResolver bomResolver =
+                new BomResolver(session, rootProject.getRemoteArtifactRepositories(), checksumCalculator);
+
+        plugins.forEach(plugin -> {
+            var projectOptional = projectBuilder.buildFromGav(
+                    plugin.getGroupId().getValue(),
+                    plugin.getArtifactId().getValue(),
+                    plugin.getVersion().getValue());
+
+            if (projectOptional.isEmpty()) {
+                PluginLogManager.getLog().warn(String.format("Skipping BOM resolution for %s", plugin));
+                return;
+            }
+
+            Set<Pom> boms = bomResolver.resolveForProject(projectOptional.get());
+
+            if (!boms.isEmpty()) {
+                plugin.setBoms(boms);
+            }
+        });
+    }
+
+    private static void resolveBomsForParentChain() {
+
     }
 
     /**

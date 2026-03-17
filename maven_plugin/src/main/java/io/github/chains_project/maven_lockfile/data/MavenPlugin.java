@@ -20,6 +20,7 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
     private final RepositoryId repositoryId;
     private final Set<DependencyNode> dependencies;
     private final Pom parent;
+    private Set<Pom> boms;
 
     public MavenPlugin(
             GroupId groupId,
@@ -92,9 +93,17 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
         return parent;
     }
 
+    public Set<Pom> getBoms() {
+        return boms;
+    }
+
+    public void setBoms(Set<Pom> boms) {
+        this.boms = boms;
+    }
+
     @Override
     public int hashCode() {
-        return Objects.hash(groupId, artifactId, version, checksumAlgorithm, checksum, dependencies);
+        return Objects.hash(groupId, artifactId, version, checksumAlgorithm, checksum, dependencies, boms);
     }
 
     @Override
@@ -111,7 +120,9 @@ public class MavenPlugin implements Comparable<MavenPlugin> {
                 && Objects.equals(version, other.version)
                 && Objects.equals(checksumAlgorithm, other.checksumAlgorithm)
                 && Objects.equals(checksum, other.checksum)
-                && Objects.equals(dependencies, other.dependencies);
+                && Objects.equals(dependencies, other.dependencies)
+                && Objects.equals(boms, other.boms);
+
     }
 
     @Override
