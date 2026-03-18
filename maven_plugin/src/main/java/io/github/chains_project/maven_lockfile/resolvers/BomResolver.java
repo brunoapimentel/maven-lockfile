@@ -63,7 +63,15 @@ public class BomResolver {
                     continue;
                 }
 
-                var bomTree = resolveBomParents(bomProjectOptional.get());
+                var bomProject = bomProjectOptional.get();
+                var bomBoms = resolveForProject(bomProject);
+
+                var bomTree = resolveBomParents(bomProject);
+
+                if(bomBoms.size() > 0) {
+                    bomTree.setBoms(bomBoms);
+                }
+
                 boms.add(bomTree);
             }
         }
@@ -108,6 +116,10 @@ public class BomResolver {
             } else {
                 var bom = mavenProjectToBom(project, checksumCalculator, current);
                 current = bom;
+            }
+            var bomBoms = resolveForProject(project);
+            if(bomBoms.size() > 0){
+                current.setBoms(bomBoms);
             }
         }
 
