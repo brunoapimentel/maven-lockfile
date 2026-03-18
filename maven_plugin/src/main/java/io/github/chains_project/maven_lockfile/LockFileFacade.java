@@ -318,6 +318,9 @@ public class LockFileFacade {
 
             DependencyGraph dependencyGraph = DependencyGraph.of(graph, checksumCalculator, false);
 
+            resolveParentPomsForDependencies(dependencyGraph, session, project.getPluginArtifactRepositories(), checksumCalculator);
+            resolveBomsForDependencies(dependencyGraph, session, project, checksumCalculator);
+
             // Get root dependency nodes (excluding the plugin project itself)
             Set<io.github.chains_project.maven_lockfile.graph.DependencyNode> roots = dependencyGraph.getRoots();
             PluginLogManager.getLog()
@@ -491,10 +494,6 @@ public class LockFileFacade {
                 plugin.setBoms(boms);
             }
         });
-    }
-
-    private static void resolveBomsForParentChain() {
-
     }
 
     /**
